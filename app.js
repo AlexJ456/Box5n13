@@ -504,7 +504,7 @@ document.addEventListener('DOMContentLoaded', () => {
             html += `
                 <div class="slider-container">
                     <label for="phase-time-slider">Phase Time (seconds): <span id="phase-time-value">${state.phaseTime}</span></label>
-                    <input type="range" min="3" max="6" step="1" value="${state.phaseTime}" id="phase-time-slider">
+                    <input type="range" min="3" max="10" step="1" value="${state.phaseTime}" id="phase-time-slider">
                 </div>
             `;
         }
