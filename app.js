@@ -192,7 +192,7 @@ document.addEventListener('DOMContentLoaded', () => {
             animate();
             requestWakeLock();
         } else {
-            clearInterval(interval);
+            clearTimeout(interval);
             cancelAnimationFrame(animationFrameId);
             state.totalTime = 0;
             state.countdown = state.phaseTime;
@@ -218,7 +218,7 @@ document.addEventListener('DOMContentLoaded', () => {
         state.timeLimitReached = false;
         state.pulseStartTime = null;
         state.hasStarted = false;
-        clearInterval(interval);
+        clearTimeout(interval);
         cancelAnimationFrame(animationFrameId);
         invalidateGradient();
         drawScene({ progress: 0, showTrail: false, phase: state.count });
@@ -258,9 +258,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function startInterval() {
-        clearInterval(interval);
+        clearTimeout(interval);
         lastStateUpdate = performance.now();
-        interval = setInterval(() => {
+        let expected = performance.now() + 1000;
+        step();
+
+        function step() {
             state.totalTime += 1;
             if (state.timeLimit && !state.timeLimitReached) {
                 const timeLimitSeconds = parseInt(state.timeLimit) * 60;
@@ -277,16 +280,24 @@ document.addEventListener('DOMContentLoaded', () => {
                     state.sessionComplete = true;
                     state.isPlaying = false;
                     state.hasStarted = false;
-                    clearInterval(interval);
                     cancelAnimationFrame(animationFrameId);
                     releaseWakeLock();
+                    render();
+                    return;
                 }
             } else {
                 state.countdown -= 1;
             }
             lastStateUpdate = performance.now();
             render();
-        }, 1000);
+
+            if (!state.isPlaying) return;
+
+            const now = performance.now();
+            const drift = now - expected;
+            expected += 1000;
+            interval = setTimeout(step, Math.max(0, 1000 - drift));
+        }
     }
 
     function drawScene({ progress = 0, phase = state.count, showTrail = state.isPlaying, timestamp = performance.now() } = {}) {
