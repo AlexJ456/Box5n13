@@ -20,6 +20,9 @@ document.addEventListener('DOMContentLoaded', () => {
         timeLimitReached: false,
         phaseTime: 4,
         pulseStartTime: null,
+        sessionStartTime: null,
+        phaseStartTime: null,
+        phaseEndTime: null,
         devicePixelRatio: Math.min(window.devicePixelRatio || 1, 1.75),
         viewportWidth: initialWidth,
         viewportHeight: initialHeight,
@@ -142,9 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    let interval;
     let animationFrameId;
-    let lastStateUpdate;
 
     async function requestWakeLock() {
         if ('wakeLock' in navigator) {
@@ -181,6 +182,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
             }
             state.hasStarted = true;
+            state.sessionStartTime = performance.now();
+            state.phaseStartTime = performance.now();
+            state.phaseEndTime = state.phaseStartTime + state.phaseTime * 1000;
             state.totalTime = 0;
             state.countdown = state.phaseTime;
             state.count = 0;
@@ -188,11 +192,9 @@ document.addEventListener('DOMContentLoaded', () => {
             state.timeLimitReached = false;
             state.pulseStartTime = performance.now();
             playTone();
-            startInterval();
             animate();
             requestWakeLock();
         } else {
-            clearTimeout(interval);
             cancelAnimationFrame(animationFrameId);
             state.totalTime = 0;
             state.countdown = state.phaseTime;
@@ -200,6 +202,9 @@ document.addEventListener('DOMContentLoaded', () => {
             state.sessionComplete = false;
             state.timeLimitReached = false;
             state.hasStarted = false;
+            state.sessionStartTime = null;
+            state.phaseStartTime = null;
+            state.phaseEndTime = null;
             invalidateGradient();
             drawScene({ progress: 0, showTrail: false, phase: state.count });
             state.pulseStartTime = null;
@@ -217,8 +222,10 @@ document.addEventListener('DOMContentLoaded', () => {
         state.timeLimit = '';
         state.timeLimitReached = false;
         state.pulseStartTime = null;
+        state.sessionStartTime = null;
+        state.phaseStartTime = null;
+        state.phaseEndTime = null;
         state.hasStarted = false;
-        clearTimeout(interval);
         cancelAnimationFrame(animationFrameId);
         invalidateGradient();
         drawScene({ progress: 0, showTrail: false, phase: state.count });
@@ -238,6 +245,9 @@ document.addEventListener('DOMContentLoaded', () => {
     function startWithPreset(minutes) {
         state.timeLimit = minutes.toString();
         state.isPlaying = true;
+        state.sessionStartTime = performance.now();
+        state.phaseStartTime = performance.now();
+        state.phaseEndTime = state.phaseStartTime + state.phaseTime * 1000;
         state.totalTime = 0;
         state.countdown = state.phaseTime;
         state.count = 0;
@@ -251,53 +261,9 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
         playTone();
-        startInterval();
         animate();
         requestWakeLock();
         render();
-    }
-
-    function startInterval() {
-        clearTimeout(interval);
-        lastStateUpdate = performance.now();
-        let expected = performance.now() + 1000;
-        step();
-
-        function step() {
-            state.totalTime += 1;
-            if (state.timeLimit && !state.timeLimitReached) {
-                const timeLimitSeconds = parseInt(state.timeLimit) * 60;
-                if (state.totalTime >= timeLimitSeconds) {
-                    state.timeLimitReached = true;
-                }
-            }
-            if (state.countdown === 1) {
-                state.count = (state.count + 1) % 4;
-                state.pulseStartTime = performance.now();
-                state.countdown = state.phaseTime;
-                playTone();
-                if (state.count === 3 && state.timeLimitReached) {
-                    state.sessionComplete = true;
-                    state.isPlaying = false;
-                    state.hasStarted = false;
-                    cancelAnimationFrame(animationFrameId);
-                    releaseWakeLock();
-                    render();
-                    return;
-                }
-            } else {
-                state.countdown -= 1;
-            }
-            lastStateUpdate = performance.now();
-            render();
-
-            if (!state.isPlaying) return;
-
-            const now = performance.now();
-            const drift = now - expected;
-            expected += 1000;
-            interval = setTimeout(step, Math.max(0, 1000 - drift));
-        }
     }
 
     function drawScene({ progress = 0, phase = state.count, showTrail = state.isPlaying, timestamp = performance.now() } = {}) {
@@ -432,15 +398,59 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function animate() {
         if (!state.isPlaying) return;
+
         const now = performance.now();
-        const elapsed = (now - lastStateUpdate) / 1000;
-        const effectiveCountdown = state.countdown - elapsed;
-        let progress = (state.phaseTime - effectiveCountdown) / state.phaseTime;
-        progress = Math.max(0, Math.min(1, progress));
+
+        // Update totalTime
+        const newTotalTime = Math.floor((now - state.sessionStartTime) / 1000);
+        let needsRender = newTotalTime !== state.totalTime;
+        state.totalTime = newTotalTime;
+
+        // Check time limit
+        if (state.timeLimit && !state.timeLimitReached && state.totalTime >= parseInt(state.timeLimit) * 60) {
+            state.timeLimitReached = true;
+            needsRender = true;
+        }
+
+        // Check if phase ended
+        let advanced = false;
+        while (now >= state.phaseEndTime && state.isPlaying) {
+            state.count = (state.count + 1) % 4;
+            state.phaseStartTime = state.phaseEndTime;
+            state.phaseEndTime = state.phaseStartTime + state.phaseTime * 1000;
+            state.pulseStartTime = now;
+            playTone();
+            advanced = true;
+            needsRender = true;
+            if (state.count === 3 && state.timeLimitReached) {
+                state.sessionComplete = true;
+                state.isPlaying = false;
+                state.hasStarted = false;
+                releaseWakeLock();
+            }
+        }
+
+        // Calculate current countdown
+        const phaseRemaining = (state.phaseEndTime - now) / 1000;
+        const newCountdown = Math.ceil(phaseRemaining);
+        if (newCountdown !== state.countdown || advanced) {
+            state.countdown = newCountdown;
+            needsRender = true;
+        }
+
+        // Calculate progress
+        const phaseElapsed = (now - state.phaseStartTime) / 1000;
+        let progress = phaseElapsed / state.phaseTime;
 
         drawScene({ progress, timestamp: now });
 
-        animationFrameId = requestAnimationFrame(animate);
+        if (needsRender) {
+            render();
+        }
+
+        if (state.isPlaying) {
+            animationFrameId = requestAnimationFrame(animate);
+        }
     }
 
     function render() {
